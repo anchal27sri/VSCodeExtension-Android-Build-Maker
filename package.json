@@ -1,0 +1,88 @@
+{
+  "name": "android-runner",
+  "displayName": "Android Runner",
+  "description": "Detects Android projects and provides a one-click build + install + launch flow via gradle and adb.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "androidRunner.run",
+        "title": "Android Runner: Build, Install & Launch",
+        "category": "Android Runner",
+        "icon": "$(play)"
+      }
+    ],
+    "colors": [
+      {
+        "id": "androidRunner.runButtonBackground",
+        "description": "Background color of the Android Runner status bar button.",
+        "defaults": {
+          "dark": "#16a34a",
+          "light": "#16a34a",
+          "highContrast": "#16a34a",
+          "highContrastLight": "#16a34a"
+        }
+      },
+      {
+        "id": "androidRunner.runButtonForeground",
+        "description": "Foreground color of the Android Runner status bar button.",
+        "defaults": {
+          "dark": "#ffffff",
+          "light": "#ffffff",
+          "highContrast": "#ffffff",
+          "highContrastLight": "#000000"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Android Runner",
+      "properties": {
+        "androidRunner.gradleArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments appended to the gradle build invocation (e.g. [\"--info\", \"-x\", \"lint\"])."
+        },
+        "androidRunner.gradleTask": {
+          "type": "string",
+          "default": "assembleDebug",
+          "description": "Gradle task to invoke when the Run button is clicked."
+        },
+        "androidRunner.adbPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to adb. Leave empty to auto-detect from ANDROID_HOME / ANDROID_SDK_ROOT / PATH."
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "androidRunner.run",
+        "key": "shift+f10",
+        "mac": "shift+f10",
+        "when": "androidRunner.isAndroidProject"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
