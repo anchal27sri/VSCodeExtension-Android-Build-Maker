@@ -135,3 +135,66 @@ async function findGradleNamespace(folder: vscode.WorkspaceFolder): Promise<stri
     }
     return undefined;
 }
+
+/**
+ * Resolves the actual applicationId from build.gradle defaultConfig.
+ *
+ * In AGP 7+, the manifest `package` attribute is just the namespace (for R class),
+ * while `applicationId` in defaultConfig is the real installed package name.
+ * These can be completely different (e.g. namespace=com.microsoft.defender,
+ * applicationId=com.microsoft.scmx).
+ */
+export function resolveApplicationId(folder: vscode.WorkspaceFolder, appModule?: string): string | undefined {
+    const root = folder.uri.fsPath;
+    const module = appModule || 'app';
+    const modulePath = path.join(root, module);
+
+    for (const name of ['build.gradle', 'build.gradle.kts']) {
+        const buildFile = path.join(modulePath, name);
+        if (!fs.existsSync(buildFile)) { continue; }
+        try {
+            const content = fs.readFileSync(buildFile, 'utf8');
+
+            // Match applicationId inside defaultConfig { ... } block
+            const defaultConfigStart = content.indexOf('defaultConfig');
+            if (defaultConfigStart < 0) { continue; }
+            let depth = 0;
+            let start = -1;
+            let end = -1;
+            for (let i = defaultConfigStart; i < content.length; i++) {
+                if (content[i] === '{') {
+                    if (depth === 0) { start = i + 1; }
+                    depth++;
+                } else if (content[i] === '}') {
+                    depth--;
+                    if (depth === 0) { end = i; break; }
+                }
+            }
+            if (start < 0 || end < 0) { continue; }
+            const block = content.substring(start, end);
+
+            // Direct string: applicationId "com.example.app" or applicationId = "com.example.app"
+            const directMatch = block.match(/applicationId\s*[=]?\s*['"]([^'"]+)['"]/);
+            if (directMatch) {
+                return directMatch[1];
+            }
+
+            // Variable reference: applicationId variableName
+            // Try to resolve the variable from the same file
+            const varMatch = block.match(/applicationId\s+([a-zA-Z_]\w*)/);
+            if (varMatch) {
+                const varName = varMatch[1];
+                // Look for: def varName = "value" or val varName = "value"
+                const varDef = content.match(new RegExp(`(?:def|val|var)\\s+${varName}\\s*=\\s*['"]([^'"]+)['"]`));
+                if (varDef) { return varDef[1]; }
+                // Look for: varName = "value" (assignment before defaultConfig)
+                const assignMatch = content.substring(0, defaultConfigStart)
+                    .match(new RegExp(`${varName}\\s*=\\s*['"]([^'"]+)['"]`));
+                if (assignMatch) { return assignMatch[1]; }
+            }
+        } catch {
+            // ignore
+        }
+    }
+    return undefined;
+}
