@@ -132,8 +132,9 @@ export async function listDevices(): Promise<AdbDevice[]> {
 }
 
 /**
- * Always prompts the user with a QuickPick of online devices. Re-lists on
- * "Refresh". Returns undefined if the user cancels.
+ * Resolves a single online adb device. Auto-selects when exactly one device
+ * is connected; otherwise shows a QuickPick (with a Refresh entry).
+ * Returns undefined if the user cancels.
  */
 export async function pickDevice(): Promise<AdbDevice | undefined> {
     const REFRESH_LABEL = '$(refresh) Refresh device list';
@@ -150,6 +151,15 @@ export async function pickDevice(): Promise<AdbDevice | undefined> {
             if (choice === 'Retry') { continue; }
             if (choice === 'Open Logs') { getOutputChannel().show(true); }
             return undefined;
+        }
+
+        // Skip the picker when there's exactly one online device.
+        if (devices.length === 1) {
+            const d = devices[0];
+            getOutputChannel().appendLine(
+                `[Android Runner] Auto-selected the only connected device: ${d.model ?? d.product ?? d.serial} (${d.serial}).`
+            );
+            return d;
         }
 
         type Item = vscode.QuickPickItem & { device?: AdbDevice; refresh?: boolean };
@@ -205,12 +215,9 @@ export async function listUsers(serial: string): Promise<AdbUser[]> {
 }
 
 /**
- * Always-prompt picker for the Android user profile to install into.
+ * Resolves the Android user profile to install into. Auto-selects when the
+ * device only reports a single user; otherwise shows a QuickPick.
  * Returns undefined if the user cancels.
- *
- * If the device only reports a single user (typical for emulators without a
- * work profile) we still show the picker per the user's request that profile
- * selection should always be presented.
  */
 export async function pickUser(serial: string): Promise<AdbUser | undefined> {
     let users: AdbUser[];
@@ -230,6 +237,15 @@ export async function pickUser(serial: string): Promise<AdbUser | undefined> {
     if (users.length === 0) {
         // Fall back silently; nothing to pick.
         return { id: 0, name: 'Owner', running: true, kind: 'owner' };
+    }
+
+    // Skip the picker when there's exactly one profile.
+    if (users.length === 1) {
+        const u = users[0];
+        getOutputChannel().appendLine(
+            `[Android Runner] Auto-selected the only profile on device: ${u.name || `user ${u.id}`} (id ${u.id}).`
+        );
+        return u;
     }
 
     const iconFor = (u: AdbUser) =>

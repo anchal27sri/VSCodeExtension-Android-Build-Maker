@@ -24,8 +24,8 @@ If a future API exposes the title bar area, swapping the placement requires only
 - **Automatic detection** of Android projects via gradle markers (`settings.gradle[.kts]`, `gradlew`) and/or any `AndroidManifest.xml`. The button is hidden in non-Android workspaces.
 - **Live build logs** in a dedicated `Android Runner` output channel.
 - **Cancellable build progress** notification (Cmd/Ctrl+click the cancel button to kill gradle).
-- **Always-prompt device picker** with a Refresh action (helpful when you start an emulator after clicking Run).
-- **Always-prompt user-profile picker** (Owner / Work profile / other secondary users) — the APK is installed and launched as the chosen Android user via `adb install --user` and `am start --user`.
+- **Smart device picker**: auto-selects when exactly one device is online; shows a QuickPick (with a **Refresh** action) only when zero or multiple devices are connected.
+- **Smart user-profile picker**: auto-selects when the device only has one profile; otherwise prompts (Owner / Work profile / other secondary users). The APK is installed and launched as the chosen Android user via `adb install --user` and `am start --user`.
 - **Launcher activity auto-discovery** by parsing the merged manifest (falls back to source manifest, then to gradle `namespace`, then to `adb shell monkey`).
 - **Multi-module support** — prefers `app/build/outputs/apk/debug/*.apk`, prompts on ambiguity.
 - **Keybinding**: `Shift+F10` (Android-Studio-style) runs the flow when an Android project is detected.
@@ -48,8 +48,8 @@ If a future API exposes the title bar area, swapping the placement requires only
 2. Wait a moment — the green `▶ Run Android` button will appear on the left of the status bar.
 3. Click it (or press `Shift+F10`).
 4. Watch `gradlew assembleDebug` run in the **Output → Android Runner** panel.
-5. When the build succeeds, pick a device from the QuickPick (use **Refresh** if you just plugged one in).
-6. Pick the Android **user profile** to install into (e.g. *Owner*, *Work profile*, or any secondary user reported by `pm list users`).
+5. When the build succeeds, pick a device if more than one is connected (skipped automatically for a single device; use **Refresh** if you just plugged one in).
+6. Pick the Android **user profile** to install into if the device has more than one (skipped automatically for single-profile devices).
 7. The APK installs, the app launches, and you're done.
 
 If anything fails, the error notification offers an **Open Logs** action that jumps straight to the output channel.
@@ -102,8 +102,8 @@ click ▶ Run Android
    ├─ refresh detection (sanity check)
    ├─ runBuild(folder)                  ── spawns ./gradlew assembleDebug, streams to Output
    │     └─ locateApk()                 ── prefers app/build/outputs/apk/debug/*.apk
-   ├─ pickDevice()                       ── adb devices -l → QuickPick (always prompts)
-   ├─ pickUser(serial)                   ── adb shell pm list users → QuickPick (always prompts)
+   ├─ pickDevice()                       ── adb devices -l → auto-pick if 1, else QuickPick
+   ├─ pickUser(serial)                   ── adb shell pm list users → auto-pick if 1, else QuickPick
    ├─ install(serial, apkPath, userId)   ── adb -s <serial> install -r -t --user <id> <apk>
    └─ getLauncherInfo(folder)
          ├─ merged manifest (build/intermediates/merged_manifests/**)
