@@ -13,6 +13,21 @@ export interface AdbDevice {
     transportId?: string;
 }
 
+export interface AdbUser {
+    id: number;
+    name: string;
+    /** Raw flags hex from `pm list users`, when available. */
+    flags?: string;
+    running: boolean;
+    /**
+     * Heuristic classification derived from name + flags:
+     *   - owner: user id 0
+     *   - work:  managed profile (name typically "Work profile" or flags 0x20)
+     *   - secondary: any other secondary user
+     */
+    kind: 'owner' | 'work' | 'secondary';
+}
+
 /**
  * Locates the adb binary. Priority:
  *   1. androidRunner.adbPath setting
@@ -157,28 +172,126 @@ export async function pickDevice(): Promise<AdbDevice | undefined> {
     }
 }
 
-export async function install(serial: string, apkPath: string): Promise<void> {
+/**
+ * Lists the Android users (profiles) on the given device by parsing
+ * `adb shell pm list users`.
+ *
+ * Expected output looks like:
+ *   Users:
+ *     UserInfo{0:Owner:c13} running
+ *     UserInfo{10:Work profile:30} running
+ */
+export async function listUsers(serial: string): Promise<AdbUser[]> {
     const adb = findAdb();
-    await runAdbStreaming(adb, ['-s', serial, 'install', '-r', '-t', apkPath]);
+    const stdout = await runAdbCapture(adb, ['-s', serial, 'shell', 'pm', 'list', 'users']);
+    const users: AdbUser[] = [];
+    const re = /UserInfo\{(\d+):([^:}]*):?([0-9a-fA-F]*)\}\s*(running)?/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(stdout)) !== null) {
+        const id = parseInt(m[1], 10);
+        const name = (m[2] || '').trim();
+        const flags = m[3] || undefined;
+        const running = !!m[4];
+        let kind: AdbUser['kind'] = 'secondary';
+        if (id === 0) {
+            kind = 'owner';
+        } else if (/work\s*profile/i.test(name) || (flags && (parseInt(flags, 16) & 0x20) !== 0)) {
+            // 0x20 = FLAG_MANAGED_PROFILE on AOSP
+            kind = 'work';
+        }
+        users.push({ id, name, flags, running, kind });
+    }
+    return users;
 }
 
-export async function launch(serial: string, packageId: string, activity: string): Promise<void> {
+/**
+ * Always-prompt picker for the Android user profile to install into.
+ * Returns undefined if the user cancels.
+ *
+ * If the device only reports a single user (typical for emulators without a
+ * work profile) we still show the picker per the user's request that profile
+ * selection should always be presented.
+ */
+export async function pickUser(serial: string): Promise<AdbUser | undefined> {
+    let users: AdbUser[];
+    try {
+        users = await listUsers(serial);
+    } catch (err: any) {
+        const choice = await vscode.window.showErrorMessage(
+            `Could not list user profiles on device: ${err.message}`,
+            'Continue as default user', 'Cancel'
+        );
+        if (choice === 'Continue as default user') {
+            return { id: 0, name: 'Owner', running: true, kind: 'owner' };
+        }
+        return undefined;
+    }
+
+    if (users.length === 0) {
+        // Fall back silently; nothing to pick.
+        return { id: 0, name: 'Owner', running: true, kind: 'owner' };
+    }
+
+    const iconFor = (u: AdbUser) =>
+        u.kind === 'work' ? '$(briefcase)' :
+        u.kind === 'owner' ? '$(person)' :
+        '$(account)';
+    const detailFor = (u: AdbUser) => {
+        const bits: string[] = [];
+        bits.push(u.kind === 'work' ? 'work profile' :
+                  u.kind === 'owner' ? 'primary user' : 'secondary user');
+        if (!u.running) { bits.push('stopped'); }
+        if (u.flags) { bits.push(`flags=0x${u.flags}`); }
+        return bits.join(' • ');
+    };
+
+    type Item = vscode.QuickPickItem & { user: AdbUser };
+    const items: Item[] = users.map(u => ({
+        label: `${iconFor(u)} ${u.name || `User ${u.id}`}`,
+        description: `user ${u.id}`,
+        detail: detailFor(u),
+        user: u
+    }));
+
+    const pick = await vscode.window.showQuickPick(items, {
+        placeHolder: 'Select the Android profile to install the APK into',
+        matchOnDetail: true
+    });
+    return pick?.user;
+}
+
+export async function install(serial: string, apkPath: string, userId?: number): Promise<void> {
+    const adb = findAdb();
+    const args = ['-s', serial, 'install', '-r', '-t'];
+    if (typeof userId === 'number') {
+        args.push('--user', String(userId));
+    }
+    args.push(apkPath);
+    await runAdbStreaming(adb, args);
+}
+
+export async function launch(serial: string, packageId: string, activity: string, userId?: number): Promise<void> {
     const adb = findAdb();
     const component = activity.includes('/')
         ? activity
         : `${packageId}/${activity.startsWith('.') ? packageId + activity : activity}`;
-    await runAdbStreaming(adb, ['-s', serial, 'shell', 'am', 'start', '-n', component]);
+    const args = ['-s', serial, 'shell', 'am', 'start'];
+    if (typeof userId === 'number') {
+        args.push('--user', String(userId));
+    }
+    args.push('-n', component);
+    await runAdbStreaming(adb, args);
 }
 
 /**
  * Fallback launch using monkey when we cannot identify the launcher activity.
  */
-export async function launchViaMonkey(serial: string, packageId: string): Promise<void> {
+export async function launchViaMonkey(serial: string, packageId: string, userId?: number): Promise<void> {
     const adb = findAdb();
-    await runAdbStreaming(adb, [
-        '-s', serial, 'shell', 'monkey',
-        '-p', packageId,
-        '-c', 'android.intent.category.LAUNCHER',
-        '1'
-    ]);
+    const args = ['-s', serial, 'shell', 'monkey'];
+    if (typeof userId === 'number') {
+        args.push('--user', String(userId));
+    }
+    args.push('-p', packageId, '-c', 'android.intent.category.LAUNCHER', '1');
+    await runAdbStreaming(adb, args);
 }

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { isAndroidProject, resolveAndroidFolder } from './detectAndroidProject';
 import { runBuild, getOutputChannel } from './buildAndroid';
-import { pickDevice, install, launch, launchViaMonkey } from './adb';
+import { pickDevice, pickUser, install, launch, launchViaMonkey } from './adb';
 import { getLauncherInfo } from './manifestParser';
 
 const CONTEXT_KEY = 'androidRunner.isAndroidProject';
@@ -110,20 +110,28 @@ async function runHandler(): Promise<void> {
                     throw new Error('No device selected.');
                 }
 
-                // 3. Install
-                setRunningState(`Installing on ${device.model ?? device.serial}…`);
-                progress.report({ message: `installing on ${device.model ?? device.serial}…` });
-                await install(device.serial, apkPath);
+                // 3. Pick user profile (always prompt per user request)
+                setRunningState('Selecting profile…');
+                progress.report({ message: 'selecting profile…' });
+                const user = await pickUser(device.serial);
+                if (!user) {
+                    throw new Error('No profile selected.');
+                }
 
-                // 4. Resolve launcher activity & launch
+                // 4. Install
+                setRunningState(`Installing on ${device.model ?? device.serial} (${user.name || `user ${user.id}`})…`);
+                progress.report({ message: `installing on ${device.model ?? device.serial} as ${user.name || `user ${user.id}`}…` });
+                await install(device.serial, apkPath, user.id);
+
+                // 5. Resolve launcher activity & launch
                 setRunningState('Launching…');
                 progress.report({ message: 'launching app…' });
                 try {
                     const info = await getLauncherInfo(folder);
                     if (info.activity) {
-                        await launch(device.serial, info.packageId, info.activity);
+                        await launch(device.serial, info.packageId, info.activity, user.id);
                     } else {
-                        await launchViaMonkey(device.serial, info.packageId);
+                        await launchViaMonkey(device.serial, info.packageId, user.id);
                     }
                 } catch (err: any) {
                     getOutputChannel().appendLine(`[Android Runner] Could not auto-launch app: ${err.message}`);
@@ -133,7 +141,7 @@ async function runHandler(): Promise<void> {
                 }
 
                 vscode.window.showInformationMessage(
-                    `Android Runner: installed and launched on ${device.model ?? device.serial}.`
+                    `Android Runner: installed and launched on ${device.model ?? device.serial} (${user.name || `user ${user.id}`}).`
                 );
             }
         );
