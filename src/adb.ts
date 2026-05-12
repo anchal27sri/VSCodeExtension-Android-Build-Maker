@@ -300,14 +300,189 @@ export async function launch(serial: string, packageId: string, activity: string
 }
 
 /**
- * Fallback launch using monkey when we cannot identify the launcher activity.
+ * Query the device to resolve the launcher activity for a package.
+ * Tries `cmd package resolve-activity` (API 24+) first, then falls back
+ * to parsing `dumpsys package`.
+ */
+async function resolveDeviceLauncherActivity(
+    serial: string,
+    packageId: string,
+    userId?: number
+): Promise<string | undefined> {
+    const adb = findAdb();
+    const out = getOutputChannel();
+
+    // Attempt 1: cmd package resolve-activity --brief (API 28+)
+    try {
+        const resolveArgs = ['-s', serial, 'shell', 'cmd', 'package', 'resolve-activity', '--brief'];
+        if (typeof userId === 'number') {
+            resolveArgs.push('--user', String(userId));
+        }
+        resolveArgs.push('-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', packageId);
+        const stdout = await runAdbCapture(adb, resolveArgs);
+        // Output format: "priority=0 preferredOrder=0 ...\ncom.pkg/.Activity"
+        const lines = stdout.trim().split(/\r?\n/).filter(l => l.includes('/'));
+        if (lines.length > 0) {
+            const component = lines[lines.length - 1].trim();
+            if (component.includes('/')) {
+                out.appendLine(`[Android Runner] Resolved launcher from device: ${component}`);
+                return component;
+            }
+        }
+    } catch {
+        // Not supported on this API level; fall through
+    }
+
+    // Attempt 2: parse dumpsys package for MAIN/LAUNCHER activity
+    try {
+        const dumpArgs = ['-s', serial, 'shell', 'dumpsys', 'package', packageId];
+        const stdout = await runAdbCapture(adb, dumpArgs);
+        // Look for a MAIN/LAUNCHER intent filter in the activity resolver table
+        // Pattern: "... <componentName>/ActivityName filter ..."
+        // We search for lines containing our package and LAUNCHER
+        const lines = stdout.split(/\r?\n/);
+        let inMainLauncher = false;
+        for (const line of lines) {
+            if (/android\.intent\.action\.MAIN/.test(line)) {
+                inMainLauncher = true;
+            }
+            if (inMainLauncher && /android\.intent\.category\.LAUNCHER/.test(line)) {
+                // The component is usually a few lines above; scan backwards
+                // Or look for the component in nearby lines
+            }
+            // Direct pattern: "activityName/className" in activity resolver
+            if (inMainLauncher && line.includes(packageId) && line.includes('/')) {
+                const match = line.match(new RegExp(`(${packageId.replace(/\./g, '\\.')}\/[\\w.$]+)`));
+                if (match) {
+                    out.appendLine(`[Android Runner] Resolved launcher from dumpsys: ${match[1]}`);
+                    return match[1];
+                }
+            }
+            // Reset if we hit a blank line (new section)
+            if (line.trim() === '') { inMainLauncher = false; }
+        }
+
+        // Broader search: find the component from Activity Resolver Table
+        const resolverRe = new RegExp(
+            `(${packageId.replace(/\./g, '\\.')}\\/[\\w.$]+).*?MAIN.*?LAUNCHER`,
+            's'
+        );
+        const resolverMatch = stdout.match(resolverRe);
+        if (resolverMatch) {
+            out.appendLine(`[Android Runner] Resolved launcher from dumpsys (broad): ${resolverMatch[1]}`);
+            return resolverMatch[1];
+        }
+    } catch {
+        // ignore
+    }
+
+    return undefined;
+}
+
+/**
+ * Fallback launch when we cannot identify the launcher activity from the
+ * manifest. Queries the device to resolve the correct component, then
+ * launches via `am start -n`.
  */
 export async function launchViaMonkey(serial: string, packageId: string, userId?: number): Promise<void> {
+    const out = getOutputChannel();
+
+    // Try to resolve the actual launcher component from the device
+    const component = await resolveDeviceLauncherActivity(serial, packageId, userId);
+
     const adb = findAdb();
-    const args = ['-s', serial, 'shell', 'monkey'];
+    if (component) {
+        // Launch with the resolved component
+        const args = ['-s', serial, 'shell', 'am', 'start'];
+        if (typeof userId === 'number') {
+            args.push('--user', String(userId));
+        }
+        args.push('-n', component);
+        await runAdbStreaming(adb, args);
+    } else {
+        // Last resort: try am start with intent action (may fail on some setups)
+        out.appendLine('[Android Runner] Could not resolve launcher activity; attempting intent-based launch…');
+        const args = ['-s', serial, 'shell', 'am', 'start'];
+        if (typeof userId === 'number') {
+            args.push('--user', String(userId));
+        }
+        args.push('-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', packageId);
+        await runAdbStreaming(adb, args);
+    }
+}
+
+/**
+ * Force-stop the app on the device before re-deploying (like Android Studio).
+ */
+export async function forceStop(serial: string, packageId: string, userId?: number): Promise<void> {
+    const adb = findAdb();
+    const args = ['-s', serial, 'shell', 'am', 'force-stop'];
     if (typeof userId === 'number') {
         args.push('--user', String(userId));
     }
-    args.push('-p', packageId, '-c', 'android.intent.category.LAUNCHER', '1');
+    args.push(packageId);
     await runAdbStreaming(adb, args);
+}
+
+/**
+ * Query the device to find the actual installed package name.
+ * When the manifest package differs from the applicationId (common with
+ * AGP 7+ namespace), the manifest-derived packageId won't match anything
+ * on the device. This function searches `pm list packages` for the real name.
+ *
+ * Tries exact match first, then falls back to prefix/substring matching.
+ */
+export async function resolveInstalledPackage(
+    serial: string,
+    candidateIds: string[],
+    userId?: number
+): Promise<string | undefined> {
+    const adb = findAdb();
+    const out = getOutputChannel();
+    const pmArgs = ['-s', serial, 'shell', 'pm', 'list', 'packages'];
+    if (typeof userId === 'number') {
+        pmArgs.push('--user', String(userId));
+    }
+    let stdout: string;
+    try {
+        stdout = await runAdbCapture(adb, pmArgs);
+    } catch {
+        return undefined;
+    }
+
+    const installed = stdout.split(/\r?\n/)
+        .map(l => l.replace(/^package:/, '').trim())
+        .filter(l => l.length > 0);
+
+    // 1. Exact match for any candidate
+    for (const candidate of candidateIds) {
+        if (installed.includes(candidate)) {
+            out.appendLine(`[Android Runner] Package verified on device: ${candidate}`);
+            return candidate;
+        }
+    }
+
+    // 2. Prefix match: find packages that start with a candidate
+    for (const candidate of candidateIds) {
+        const match = installed.find(p => p.startsWith(candidate));
+        if (match) {
+            out.appendLine(`[Android Runner] Package resolved via prefix match: ${match} (from ${candidate})`);
+            return match;
+        }
+    }
+
+    // 3. Reverse prefix: find candidate that is a prefix of installed packages
+    for (const candidate of candidateIds) {
+        // Try removing common suffixes like .bvt, .dev, .debug
+        const base = candidate.replace(/\.(bvt|dev|debug|staging|beta|alpha)$/, '');
+        if (base !== candidate) {
+            const match = installed.find(p => p === base || p.startsWith(base + '.'));
+            if (match) {
+                out.appendLine(`[Android Runner] Package resolved via base match: ${match} (base=${base})`);
+                return match;
+            }
+        }
+    }
+
+    return undefined;
 }

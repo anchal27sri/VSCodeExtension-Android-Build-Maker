@@ -56,13 +56,58 @@
         },
         "androidRunner.gradleTask": {
           "type": "string",
-          "default": "assembleDebug",
-          "description": "Gradle task to invoke when the Run button is clicked."
+          "default": "installDebug",
+          "description": "Gradle task to invoke when the Run button is clicked. Use installDebug (default) for incremental split-APK installs like Android Studio, or assembleDebug for build-only."
+        },
+        "androidRunner.appModule": {
+          "type": "string",
+          "default": "app",
+          "description": "The Gradle module that produces the APK (e.g. 'app'). The task is scoped to :<appModule>:<task> to avoid ambiguity in multi-module projects."
+        },
+        "androidRunner.buildFlavor": {
+          "type": "string",
+          "default": "",
+          "description": "Product flavor to use (e.g. 'dev'). When set, the extension uses this flavor directly without prompting. Leave empty to be prompted on first run (the choice is saved automatically)."
         },
         "androidRunner.adbPath": {
           "type": "string",
           "default": "",
           "description": "Optional absolute path to adb. Leave empty to auto-detect from ANDROID_HOME / ANDROID_SDK_ROOT / PATH."
+        },
+        "androidRunner.enableBuildCache": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pass --build-cache to Gradle so unchanged task outputs are reused across builds."
+        },
+        "androidRunner.enableParallelBuild": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pass --parallel to Gradle so independent modules build concurrently."
+        },
+        "androidRunner.enableConfigurationCache": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass --configuration-cache to Gradle (8+). Dramatically speeds up incremental builds but requires project compatibility."
+        },
+        "androidRunner.rememberDevice": {
+          "type": "boolean",
+          "default": true,
+          "description": "Remember the last selected device and user profile, skipping the picker on subsequent runs if still connected."
+        },
+        "androidRunner.forceStopBeforeLaunch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Force-stop the app before launching (like Android Studio) so the process restarts cleanly."
+        },
+        "androidRunner.offlineMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass --offline to Gradle, skipping dependency resolution. Speeds up builds when all dependencies are already cached."
+        },
+        "androidRunner.gradleJvmArgs": {
+          "type": "string",
+          "default": "-Xmx2048m",
+          "description": "JVM arguments for the Gradle daemon (set via GRADLE_OPTS). Only applied when GRADLE_OPTS is not already set in the environment."
         }
       }
     },
